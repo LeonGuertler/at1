@@ -18,16 +18,16 @@ from accelerate import Accelerator
 # Constants
 MODEL_PATH = "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B"
 ENVIRONMENT_ID = "ConnectFour-v0"
-NUM_PARALLEL_ENVS = 8
+NUM_PARALLEL_ENVS = 16
 
-EPSILON = 0.2
+EPSILON = 0.5
 GAMMA = 0.8
 LR = 2e-5
 KL_COEFF = 0.2
 EPOCHS = 3
 BATCH_SIZE = 8
 MAX_GRADIENT_NORM = 1.0
-MAX_NEW_TOKENS = 8192
+MAX_NEW_TOKENS = 2048 #8192
 OUTPUT_DIR = "./connect_four_model"
 BIG_MODEL_NAMES = None
 
@@ -253,7 +253,8 @@ class ConnectFourPPOTrainer:
                 # Extract just the observation strings
                 local_obs_list = [r[2] for r in local_requests]
                 # One pass to get all answers
-                local_results = local_agent.batch_call_with_full_answer(local_obs_list)
+                with torch.no_grad():
+                    local_results = local_agent.batch_call_with_full_answer(local_obs_list)
                 # local_results is a list of (raw_answer, parsed_answer), same length
 
                 # We then pair them back to the environment indices
@@ -368,8 +369,8 @@ class ConnectFourPPOTrainer:
         ]
         
         # Filter to include only examples with positive rewards
-        positive_examples = [ex for ex in dataset if ex["reward"] > 0]
-        return positive_examples
+        # positive_examples = [ex for ex in dataset if ex["reward"] > 0]
+        return dataset #positive_examples
     
     def compute_kl_loss(self, q_logits, p_logits):
         """Compute KL divergence loss between current and reference policy"""
@@ -434,17 +435,7 @@ class ConnectFourPPOTrainer:
         
         return avg_loss.item()
     
-    # def save_checkpoint(self, output_dir=OUTPUT_DIR):
-    #     """Save model checkpoint"""
-    #     if not os.path.exists(output_dir):
-    #         os.makedirs(output_dir)
-            
-    #     checkpoint_dir = os.path.join(output_dir, f"checkpoint-{self.global_step}")
-    #     self.model.save_pretrained(checkpoint_dir)
-    #     self.tokenizer.save_pretrained(checkpoint_dir)
-        
-    #     print(f"Model saved to {checkpoint_dir}")
-    #     return checkpoint_dir
+
     def save_checkpoint(self, output_dir=OUTPUT_DIR):
         """Save model checkpoint (only on the main process)"""
         self.accelerator.wait_for_everyone()
@@ -461,7 +452,7 @@ class ConnectFourPPOTrainer:
     
     def evaluate(self, n_games=50):
         """Evaluate the model by playing against a random agent"""
-        random_agent = ta.agents.RandomAgent()
+        gpt_4o_mini = ta.agents.OpenRouterAgent(model_name="openai/gpt-4o-mini")
         model_agent = AnswerTokenAgentWrapper(self)
         
         wins, losses, draws = 0, 0, 0
@@ -469,10 +460,10 @@ class ConnectFourPPOTrainer:
         for _ in tqdm(range(n_games), desc="Evaluating"):
             # Randomly assign player order
             if np.random.uniform() < 0.5:
-                agents = {0: model_agent, 1: random_agent}
+                agents = {0: model_agent, 1: gpt_4o_mini}
                 model_player = 0
             else:
-                agents = {0: random_agent, 1: model_agent}
+                agents = {0: gpt_4o_mini, 1: model_agent}
                 model_player = 1
                 
             # Build environment
