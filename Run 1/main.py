@@ -5,7 +5,7 @@ from config import MODEL_PATH
 trainer = ConnectFourPPOTrainer(
     model_path=MODEL_PATH,
     load_in_4bit=True,
-    lora_r=16
+    lora_r=4
 )
 
 # Run training
