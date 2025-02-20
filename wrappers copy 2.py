@@ -9,8 +9,6 @@ import json
 from typing import Optional
 
 import re
-import concurrent.futures
-from typing import List, Tuple, Optional
 
 def process_final_answer(answer: str) -> str:
     answer = answer.strip()
@@ -27,9 +25,180 @@ def process_final_answer(answer: str) -> str:
 
 
 
+# class AnswerTokenAgentWrapper:
+#     """ TODO """
+#     def __init__(
+#         self,
+#         agent,
+#         answer_token: Optional[str] = "### Answer:",
+#         debugging: bool = False
+#     ):
+#         """ TODO """
+#         super().__init__()
+#         self.agent = agent
+#         self.answer_token = answer_token
+#         self.debugging = debugging
+
+
+#     def call_with_full_answer(self, observation: str) -> str:
+#         """ TODO """
+   
+#         # set the agent prompt just for this part
+#         current_system_prompt = self.agent.system_prompt 
+#         answer_token_prompt = current_system_prompt + \
+#             f"Anything you return after '{self.answer_token}' will be submitted to the game."
+
+#         self.agent.system_prompt = answer_token_prompt
+#         if self.debugging:
+#             print(f"Model System prompt: {answer_token_prompt}")
+        
+#         raw_answer = self.agent(observation)
+
+#         # reset prompt 
+#         self.agent.system_prompt = current_system_prompt
+
+#         if self.debugging:
+#             print(f"Model raw output: {raw_answer}")
+#         if self.answer_token in raw_answer:
+#             if self.debugging:
+#                 print(f"Model filtered output: {raw_answer.split(self.answer_token)[-1]}")
+#             return raw_answer, raw_answer.split(self.answer_token)[-1]
+
+#         else:
+#             return raw_answer, raw_answer
+     
+
+#     def __call__(self, observation: str) -> str:
+#         """ TODO """
+
+#         # set the agent prompt just for this part
+#         current_system_prompt = self.agent.system_prompt 
+#         answer_token_prompt = current_system_prompt + \
+#             f"Anything you return after '{self.answer_token}' will be submitted to the game."
+
+#         self.agent.system_prompt = answer_token_prompt
+#         if self.debugging:
+#             print(f"Model System prompt: {answer_token_prompt}")
+        
+#         raw_answer = self.agent(observation)
+
+#         # reset prompt 
+#         self.agent.system_prompt = current_system_prompt
+
+#         if self.debugging:
+#             print(f"Model raw output: {raw_answer}")
+#         if self.answer_token in raw_answer:
+#             if self.debugging:
+#                 print(f"Model filtered output: {raw_answer.split(self.answer_token)[-1]}")
+#             return raw_answer.split(self.answer_token)[-1]
+
+#         else:
+#             return raw_answer
+
+
+
 STANDARD_GAME_PROMPT = "You are a competitive game player. Make sure you read the game instructions carefully, and always follow the required format."
+    
 
 
+# class AnswerTokenAgentWrapper:
+#     def __init__(
+#         self,
+#         agent,
+#         answer_token: Optional[str] = "### Final Answer",
+#         debugging: bool = False
+#     ):
+#         super().__init__()
+#         self.agent = agent
+#         self.answer_token = answer_token
+#         self.debugging = debugging
+
+#     def call_with_full_answer(self, observation: str):
+#         # 1) Save current system prompt
+#         current_system_prompt = self.agent.system_prompt
+
+#         # 2) Append instructions about "anything returned after answer token"
+#         answer_token_prompt = current_system_prompt + \
+#             f"Anything you return after '{self.answer_token}' will be submitted to the game."
+
+#         self.agent.system_prompt = answer_token_prompt
+#         if self.debugging:
+#             print(f"Model System prompt: {answer_token_prompt}")
+
+#         # 3) Generate
+#         raw_answer = self.agent(observation)
+
+#         # 4) Reset system prompt
+#         self.agent.system_prompt = current_system_prompt
+
+#         # 5) Post-process
+#         if self.debugging:
+#             print(f"Model raw output: {raw_answer}")
+
+#         print(f"observation: {observation}")
+#         print(f"raw_output: {raw_answer}")
+#         input()
+
+#         if self.answer_token in raw_answer:
+#             filtered_output = raw_answer.split(self.answer_token, 1)[-1]
+#             if self.debugging:
+#                 print(f"Model filtered output: {filtered_output}")
+            
+#             return raw_answer, process_final_answer(filtered_output) #filtered_output
+#         elif "### Final Answer" in raw_answer:
+#             filtered_output = raw_answer.split("### Final Answer", 1)[-1]
+#             if self.debugging:
+#                 print(f"Model filtered output: {filtered_output}")
+#             return raw_answer, process_final_answer(filtered_output) #filtered_output
+
+#         else:
+#             return raw_answer, raw_answer
+
+
+#     # filtered_output = process_final_answer(filtered_output)
+#     # return filtered_output
+
+
+#     def __call__(self, observation: str):
+#         # 1) Save current system prompt
+#         current_system_prompt = self.agent.system_prompt
+
+#         # 2) Append instructions about "anything returned after answer token"
+#         answer_token_prompt = current_system_prompt + \
+#             f"Anything you return after '{self.answer_token}' will be submitted to the game."
+#         self.agent.system_prompt = answer_token_prompt
+
+#         if self.debugging:
+#             print(f"Model System prompt: {answer_token_prompt}")
+
+#         # 3) Generate
+#         raw_answer = self.agent(observation)
+
+#         # 4) Reset system prompt
+#         self.agent.system_prompt = current_system_prompt
+
+#         # 5) Post-process
+#         if self.debugging:
+#             print(f"Model raw output: {raw_answer}")
+
+#         if self.answer_token in raw_answer:
+#             filtered_output = raw_answer.split(self.answer_token, 1)[-1]
+#             if self.debugging:
+#                 print(f"Model filtered output: {filtered_output}")
+#             return process_final_answer(filtered_output) #filtered_output
+
+#         elif "### Final Answer" in raw_answer:
+#             filtered_output = raw_answer.split("### Final Answer", 1)[-1]
+#             if self.debugging:
+#                 print(f"Model filtered output: {filtered_output}")
+#             return process_final_answer(filtered_output) #filtered_output
+        
+#         else:
+#             return raw_answer
+
+
+import concurrent.futures
+from typing import List, Tuple, Optional
 
 def process_final_answer(answer_str: str) -> str:
     """

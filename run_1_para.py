@@ -13,7 +13,7 @@ from tqdm import tqdm
 import numpy as np
 import torch
 from typing import List, Optional, Dict
-
+from accelerate import Accelerator
 
 # Constants
 MODEL_PATH = "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B"
@@ -39,6 +39,8 @@ class ConnectFourPPOTrainer:
         self.system_prompt = STANDARD_GAME_PROMPT
         self.model_path = model_path
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
+
+        self.accelerator = Accelerator()
         
         # Load tokenizer
         self.tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
@@ -68,6 +70,10 @@ class ConnectFourPPOTrainer:
         self.setup_lora(r=lora_r)
         self.optimizer = AdamW(self.model.parameters(), lr=LR, weight_decay=0.01)
         self.global_step = 0
+
+        # Prepare model and optimizer with Accelerate (this moves them to the correct device(s))
+        self.model, self.optimizer = self.accelerator.prepare(self.model, self.optimizer)
+
         
     def setup_lora(self, r=16):
         """Set up Low-Rank Adaptation for parameter efficient fine-tuning"""
@@ -421,23 +427,38 @@ ns, full_rewards, stats
         
         # Backward and optimize
         self.optimizer.zero_grad()
+        # Use Accelerate's backward to support distributed training
+        self.accelerator.backward(avg_loss)
         avg_loss.backward()
         torch.nn.utils.clip_grad_norm_(self.model.parameters(), MAX_GRADIENT_NORM)
         self.optimizer.step()
         
         return avg_loss.item()
     
-    def save_checkpoint(self, output_dir=OUTPUT_DIR):
-        """Save model checkpoint"""
-        if not os.path.exists(output_dir):
-            os.makedirs(output_dir)
+    # def save_checkpoint(self, output_dir=OUTPUT_DIR):
+    #     """Save model checkpoint"""
+    #     if not os.path.exists(output_dir):
+    #         os.makedirs(output_dir)
             
-        checkpoint_dir = os.path.join(output_dir, f"checkpoint-{self.global_step}")
-        self.model.save_pretrained(checkpoint_dir)
-        self.tokenizer.save_pretrained(checkpoint_dir)
+    #     checkpoint_dir = os.path.join(output_dir, f"checkpoint-{self.global_step}")
+    #     self.model.save_pretrained(checkpoint_dir)
+    #     self.tokenizer.save_pretrained(checkpoint_dir)
         
-        print(f"Model saved to {checkpoint_dir}")
-        return checkpoint_dir
+    #     print(f"Model saved to {checkpoint_dir}")
+    #     return checkpoint_dir
+    def save_checkpoint(self, output_dir=OUTPUT_DIR):
+        """Save model checkpoint (only on the main process)"""
+        self.accelerator.wait_for_everyone()
+        if self.accelerator.is_main_process:
+            if not os.path.exists(output_dir):
+                os.makedirs(output_dir)
+            checkpoint_dir = os.path.join(output_dir, f"checkpoint-{self.global_step}")
+            # Unwrap model to get the original model for saving
+            unwrapped_model = self.accelerator.unwrap_model(self.model)
+            unwrapped_model.save_pretrained(checkpoint_dir)
+            self.tokenizer.save_pretrained(checkpoint_dir)
+            print(f"Model saved to {checkpoint_dir}")
+            return checkpoint_dir
     
     def evaluate(self, n_games=50):
         """Evaluate the model by playing against a random agent"""
@@ -531,13 +552,24 @@ ns, full_rewards, stats
             if save_freq > 0 and (epoch + 1) % save_freq == 0:
                 self.save_checkpoint()
                 
-        # Final save
-        final_dir = os.path.join(OUTPUT_DIR, "final_model")
-        self.model.save_pretrained(final_dir)
-        self.tokenizer.save_pretrained(final_dir)
-        print(f"Training complete! Final model saved to {final_dir}")
+        # # Final save
+        # final_dir = os.path.join(OUTPUT_DIR, "final_model")
+        # self.model.save_pretrained(final_dir)
+        # self.tokenizer.save_pretrained(final_dir)
+        # print(f"Training complete! Final model saved to {final_dir}")
         
-        # Final evaluation
+        # # Final evaluation
+        # final_results = self.evaluate(n_games=100)
+        # return final_results
+        # Final save (only on main process)
+        self.accelerator.wait_for_everyone()
+        if self.accelerator.is_main_process:
+            final_dir = os.path.join(OUTPUT_DIR, "final_model")
+            unwrapped_model = self.accelerator.unwrap_model(self.model)
+            unwrapped_model.save_pretrained(final_dir)
+            self.tokenizer.save_pretrained(final_dir)
+            print(f"Training complete! Final model saved to {final_dir}")
+            
         final_results = self.evaluate(n_games=100)
         return final_results
 
