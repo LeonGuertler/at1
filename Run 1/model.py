@@ -51,6 +51,12 @@ class ConnectFourPPOTrainer:
             device_map="auto",
             trust_remote_code=True
         )
+
+        self.ref_model = AutoModelForCausalLM.from_pretrained(
+            self.model_path,
+            device_map="auto",
+            trust_remote_code=True
+        ).eval()
         
         # Initialize LoRA 
         self.setup_lora(r=lora_r)
@@ -58,7 +64,11 @@ class ConnectFourPPOTrainer:
         self.global_step = 0
 
         # Prepare model and optimizer with Accelerate (this moves them to the correct device(s))
-        self.model, self.optimizer = self.accelerator.prepare(self.model, self.optimizer)
+        # self.model, self.optimizer = self.accelerator.prepare(self.model, self.optimizer)
+
+        self.model, self.ref_model, self.optimizer = self.accelerator.prepare(
+            self.model, self.ref_model, self.optimizer
+        )
 
     def setup_lora(self, r=16):
         """Set up Low-Rank Adaptation for parameter efficient fine-tuning"""
@@ -79,7 +89,7 @@ class ConnectFourPPOTrainer:
 
     def __call__(self, user_input: str) -> str:
         prompt = self.system_prompt + "\n" + user_input
-        inputs = self.tokenizer(prompt, return_tensors="pt").to(self.device)
+        inputs = self.tokenizer(prompt, return_tensors="pt")#.to(self.device)
         prompt_length = inputs["input_ids"].shape[1]
         generation_output = self.model.generate(
             **inputs,
@@ -96,7 +106,7 @@ class ConnectFourPPOTrainer:
 
     def batch_generate(self, user_inputs: List[str]) -> List[str]:
         batch_prompts = [self.system_prompt + "\n" + ui for ui in user_inputs]
-        encodings = self.tokenizer(batch_prompts, return_tensors="pt", padding=True, truncation=True).to(self.device)
+        encodings = self.tokenizer(batch_prompts, return_tensors="pt", padding=True, truncation=True)#.to(self.device)
 
         # Keep track of each prompt length so we can slice out only new tokens later
         prompt_lengths = []
@@ -388,7 +398,7 @@ class ConnectFourPPOTrainer:
             full_text = prompt_text + answer_text
 
             # 2) Tokenize once
-            encoding = self.tokenizer(full_text, return_tensors="pt").to(self.device)
+            encoding = self.tokenizer(full_text, return_tensors="pt")#.to(self.device)
             input_ids = encoding["input_ids"]
             
             # 3) Create labels
@@ -406,9 +416,9 @@ class ConnectFourPPOTrainer:
             loss = outputs.loss
 
             # Optionally add KL penalty
-            if ref_model is not None:
+            if self.ref_model is not None:
                 with torch.no_grad():
-                    ref_outputs = ref_model(input_ids=input_ids)
+                    ref_outputs = self.ref_model(input_ids=input_ids)
                 kl_loss = self.compute_kl_loss(outputs.logits, ref_outputs.logits)
                 loss = loss + KL_COEFF * kl_loss
 
