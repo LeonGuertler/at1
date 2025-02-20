@@ -53,6 +53,12 @@ class ConnectFourPPOTrainer:
             trust_remote_code=True
         )
 
+        self.model.config.use_cache = False
+        self.ref_model.config.use_cache = False
+        self.model.gradient_checkpointing_enable()
+        self.ref_model.gradient_checkpointing_enable()
+
+
         self.ref_model = AutoModelForCausalLM.from_pretrained(
             self.model_path,
             device_map="auto",
