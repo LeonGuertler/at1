@@ -53,11 +53,6 @@ class ConnectFourPPOTrainer:
             trust_remote_code=True
         )
 
-        self.model.config.use_cache = False
-        self.ref_model.config.use_cache = False
-        self.model.gradient_checkpointing_enable()
-        self.ref_model.gradient_checkpointing_enable()
-
 
         self.ref_model = AutoModelForCausalLM.from_pretrained(
             self.model_path,
@@ -65,6 +60,11 @@ class ConnectFourPPOTrainer:
             trust_remote_code=True
         ).eval()
         
+        self.model.config.use_cache = False
+        self.ref_model.config.use_cache = False
+        self.model.gradient_checkpointing_enable()
+        self.ref_model.gradient_checkpointing_enable()
+
         # Initialize LoRA 
         self.setup_lora(r=lora_r)
         self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=LR, weight_decay=0.01)
