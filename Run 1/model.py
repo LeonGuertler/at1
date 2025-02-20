@@ -27,7 +27,10 @@ class ConnectFourPPOTrainer:
         self.model_path = model_path 
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
 
-        self.accelerator = Accelerator(gradient_accumulation_steps=GRAD_ACCUMULATION_STEPS)
+        self.accelerator = Accelerator(
+            gradient_accumulation_steps=GRAD_ACCUMULATION_STEPS,
+            mixed_precision="fp16"
+        )
 
         # load tokenizer 
         self.tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
@@ -353,7 +356,7 @@ class ConnectFourPPOTrainer:
             full_text = prompt_text + target_text
 
             # 2) Tokenize combined
-            enc = self.tokenizer(full_text, return_tensors="pt").to(self.accelerator.device)
+            enc = self.tokenizer(full_text, return_tensors="pt", truncation=True, max_length=4096).to(self.accelerator.device)
             input_ids = enc["input_ids"]
             
             # 3) Create labels = copy of input_ids
