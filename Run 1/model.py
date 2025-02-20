@@ -2,52 +2,38 @@ import os
 import torch
 import numpy as np
 from tqdm import tqdm
+from accelerate import Accelerator
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
-import textarena as ta
-from wrappers import AnswerTokenAgentWrapper, OpenRouterAgent
-from torch.optim import AdamW
-from torch.utils.data import Dataset, DataLoader
+
+import concurrent 
 import concurrent.futures
-from tqdm import tqdm
-import numpy as np
-import torch
+import textarena as ta 
 from typing import List, Optional, Dict
-from accelerate import Accelerator
 
-# Constants
-MODEL_PATH = "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B"
-ENVIRONMENT_ID = "ConnectFour-v0"
-NUM_PARALLEL_ENVS = 24
+from config import (
+    STANDARD_GAME_PROMPT, MAX_NEW_TOKENS, MODEL_PATH, ENVIRONMENT_ID,
+    NUM_PARALLEL_ENVS, EPSILON, GAMMA, LR, KL_COEFF, EPOCHS, BATCH_SIZE,
+    MAX_GRADIENT_NORM, MAX_NEW_TOKENS, OUTPUT_DIR, BIG_MODEL_NAMES
+)
 
-EPSILON = 0.5
-GAMMA = 0.8
-LR = 2e-5
-KL_COEFF = 0.2
-EPOCHS = 3
-BATCH_SIZE = 8
-MAX_GRADIENT_NORM = 1.0
-MAX_NEW_TOKENS = 2048 #8192
-OUTPUT_DIR = "./connect_four_model"
-BIG_MODEL_NAMES = None
+from utils import AnswerTokenAgentWrapper, OpenRouterAgent
 
-STANDARD_GAME_PROMPT = "You are a competitive game player. Make sure you read the game instructions carefully, and always follow the required format."
-    
+
 class ConnectFourPPOTrainer:
     def __init__(self, model_path=MODEL_PATH, load_in_4bit=True, lora_r=16):
-        """Initialize the PPO trainer with a DeepSeek R1 model and LoRA"""
         self.system_prompt = STANDARD_GAME_PROMPT
-        self.model_path = model_path
+        self.model_path = model_path 
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
 
         self.accelerator = Accelerator()
-        
-        # Load tokenizer
+
+        # load tokenizer 
         self.tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
-            
-        # Load model with quantization
+
+        # Load model with quanitzation
         print(f"Loading model {model_path} on {self.device}...")
         quantization_config = None
         if load_in_4bit:
@@ -68,13 +54,12 @@ class ConnectFourPPOTrainer:
         
         # Initialize LoRA 
         self.setup_lora(r=lora_r)
-        self.optimizer = AdamW(self.model.parameters(), lr=LR, weight_decay=0.01)
+        self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=LR, weight_decay=0.01)
         self.global_step = 0
 
         # Prepare model and optimizer with Accelerate (this moves them to the correct device(s))
         self.model, self.optimizer = self.accelerator.prepare(self.model, self.optimizer)
 
-        
     def setup_lora(self, r=16):
         """Set up Low-Rank Adaptation for parameter efficient fine-tuning"""
         if hasattr(self.model, "is_loaded_in_4bit") and self.model.is_loaded_in_4bit:
@@ -93,14 +78,9 @@ class ConnectFourPPOTrainer:
         self.model.print_trainable_parameters()
 
     def __call__(self, user_input: str) -> str:
-        # 1) Combine system prompt + user input
         prompt = self.system_prompt + "\n" + user_input
-
-        # 2) Tokenize the entire prompt
         inputs = self.tokenizer(prompt, return_tensors="pt").to(self.device)
         prompt_length = inputs["input_ids"].shape[1]
-
-        # 3) Generate
         generation_output = self.model.generate(
             **inputs,
             max_new_tokens=MAX_NEW_TOKENS,
@@ -109,37 +89,14 @@ class ConnectFourPPOTrainer:
             top_k=50,
             repetition_penalty=1.2,
         )
-
-        # 4) Slice out only the newly generated tokens
-        #    i.e., everything after the prompt_length.
         new_tokens = generation_output[0][prompt_length:]
-
-        # 5) Decode only the new tokens
         output_text = self.tokenizer.decode(new_tokens, skip_special_tokens=True)
-
-        # 6) (Optional) Trim spaces
         output_text = output_text.strip()
-
         return output_text
 
-
-
     def batch_generate(self, user_inputs: List[str]) -> List[str]:
-        """
-        Perform a single forward pass on a batch of inputs.
-        Returns a list of raw decoded strings (one per input).
-        """
-        # 1) Build the "prompt" for each user input
-        #    E.g. prepend self.system_prompt to each user input
         batch_prompts = [self.system_prompt + "\n" + ui for ui in user_inputs]
-
-        # 2) Tokenize as a batch
-        encodings = self.tokenizer(
-            batch_prompts,
-            return_tensors="pt",
-            padding=True,
-            truncation=True
-        ).to(self.device)
+        encodings = self.tokenizer(batch_prompts, return_tensors="pt", padding=True, truncation=True).to(self.device)
 
         # Keep track of each prompt length so we can slice out only new tokens later
         prompt_lengths = []
@@ -168,35 +125,12 @@ class ConnectFourPPOTrainer:
 
         return decoded_results
 
-
-    def collect_experience(
-        self,
-        n_episodes=100,
-        epsilon=0.1,
-        num_envs=8,
-        big_model_names=None
-    ):
-        """
-        Collect self-play experience with multiple parallel environments.
-        - Local model actions are done in a single batch pass per round.
-        - Big-model (OpenRouter) calls are done in parallel threads.
-        """
-
+    def collect_experience(self, n_episodes=100, epsilon=0.1, num_envs=8, big_model_names=None):
         if big_model_names is None:
             big_model_names = ["deepseek/deepseek-r1"]
-
-        # 1) Wrap *this* trainer in an AnswerTokenAgentWrapper for local usage:
         local_agent = AnswerTokenAgentWrapper(self, answer_token="### Final Answer")
 
-        # 2) We'll create one "template" OpenRouterAgent wrapper. In practice,
-        #    if you want to dynamically choose different big_model_names, you can
-        #    create them on the fly, or pick randomly each time. Example below.
-        #    Or you can re-instantiate an agent for each big_model_name, etc.
-        #    We'll keep it simple by storing no model_name at init, and picking
-        #    each time in parallel calls. 
-        #    (Alternatively, define separate wrappers or pass model_name in the call.)
         def openrouter_inference(observation, chosen_name):
-            # Build an ephemeral agent each time
             big_agent = AnswerTokenAgentWrapper(OpenRouterAgent(model_name=chosen_name))
             return big_agent.call_with_full_answer(observation)
 
@@ -336,13 +270,6 @@ class ConnectFourPPOTrainer:
                     stats["avg_turns"] = ((stats["avg_turns"] * (completed_episodes - 1))
                                         + turns_count[i]) / completed_episodes
                     pbar.update(1)
-
-                    # If you want to gather *more* episodes from each env, you can reset here.
-                    # For example:
-                    # envs[i].reset(num_players=2)
-                    # dones[i] = False
-                    # But typically for a simple scenario, we just keep it done.
-
         pbar.close()
 
         # Stats summary
@@ -355,30 +282,23 @@ class ConnectFourPPOTrainer:
 
         return full_observations, full_actions, full_rewards, stats
 
-
-    
     def prepare_training_batch(self, observations, actions, rewards):
         """Prepare input data for PPO training"""
         dataset = [
-            {
-                "input": obs,
-                "output": act,
-                "reward": rew 
-            }
+            {"input": obs, "output": act, "reward": rew}
             for obs, act, rew in zip(observations, actions, rewards)
         ]
-        
         # Filter to include only examples with positive rewards
         # positive_examples = [ex for ex in dataset if ex["reward"] > 0]
         return dataset #positive_examples
-    
+
     def compute_kl_loss(self, q_logits, p_logits):
         """Compute KL divergence loss between current and reference policy"""
         p_log_softmax = torch.nn.functional.log_softmax(p_logits, dim=-1)
         q_softmax = torch.nn.functional.softmax(q_logits, dim=-1)
         kl = torch.sum(q_softmax * (torch.log(q_softmax) - p_log_softmax), dim=-1)
         return kl.mean()
-        
+
     def train_ppo_step(self, batch):
         """Train a single PPO step on the collected experience"""
         self.model.train()
@@ -502,15 +422,14 @@ class ConnectFourPPOTrainer:
         print(f"  Loss rate: {results['loss_rate']:.2f}")
         
         return results
-    
+
+
+
     def train(self, n_epochs=EPOCHS, episodes_per_epoch=100, batch_size=BATCH_SIZE, save_freq=1, evaluate_freq=1):
         """Run full PPO training loop"""
         print(f"Starting PPO training for {n_epochs} epochs")
-        
         for epoch in range(n_epochs):
             print(f"\n--- Epoch {epoch+1}/{n_epochs} ---")
-
- 
             # 1. Collect experience
             observations, actions, rewards, stats = self.collect_experience(
                 n_episodes=episodes_per_epoch,
@@ -542,16 +461,6 @@ class ConnectFourPPOTrainer:
             if save_freq > 0 and (epoch + 1) % save_freq == 0:
                 self.save_checkpoint()
                 
-        # # Final save
-        # final_dir = os.path.join(OUTPUT_DIR, "final_model")
-        # self.model.save_pretrained(final_dir)
-        # self.tokenizer.save_pretrained(final_dir)
-        # print(f"Training complete! Final model saved to {final_dir}")
-        
-        # # Final evaluation
-        # final_results = self.evaluate(n_games=100)
-        # return final_results
-        # Final save (only on main process)
         self.accelerator.wait_for_everyone()
         if self.accelerator.is_main_process:
             final_dir = os.path.join(OUTPUT_DIR, "final_model")
@@ -562,26 +471,3 @@ class ConnectFourPPOTrainer:
             
         final_results = self.evaluate(n_games=100)
         return final_results
-
-# Main training function
-def train_connect_four_model():
-    # Initialize trainer
-    trainer = ConnectFourPPOTrainer(
-        model_path=MODEL_PATH,
-        load_in_4bit=True,
-        lora_r=16
-    )
-    
-    # Run training
-    results = trainer.train(
-        n_epochs=3,
-        episodes_per_epoch=100,
-        batch_size=8,
-        save_freq=1,
-        evaluate_freq=1
-    )
-    
-    return trainer, results
-
-if __name__ == "__main__":
-    trainer, results = train_connect_four_model()

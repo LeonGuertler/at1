@@ -1,0 +1,4 @@
+- decay epsilon
+- add other models to epsilon (should be reasoning)
+- connect to wandb
+- add memory recall module 

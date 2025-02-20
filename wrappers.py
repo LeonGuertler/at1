@@ -31,12 +31,12 @@ STANDARD_GAME_PROMPT = "You are a competitive game player. Make sure you read th
 
 
 
-def process_final_answer(answer_str: str) -> str:
-    """
-    Basic placeholder for any final parsing or trimming of the LLM's raw text
-    to produce the final action string.
-    """
-    return answer_str.strip()
+# def process_final_answer(answer_str: str) -> str:
+#     """
+#     Basic placeholder for any final parsing or trimming of the LLM's raw text
+#     to produce the final action string.
+#     """
+#     return answer_str.strip()
 
 class AnswerTokenAgentWrapper:
     """
