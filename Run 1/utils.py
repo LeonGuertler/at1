@@ -139,6 +139,7 @@ class OpenRouterAgent(ta.Agent):
                 print(f"Attempt {attempt} failed with error: {e}")
                 if attempt < retries:
                     time.sleep(delay)
+        return "Failed, but return anyway"
         raise last_exception
 
     def __call__(self, observation: str) -> str:
