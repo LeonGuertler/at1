@@ -245,7 +245,7 @@ class ConnectFourPPOTrainer:
                     if ENVIRONMENT_ID == "SpellingBee-v0":
                         wid = 0 if rewards[0] > rewards[1] else 1
                         rewards[wid] = 1 
-
+                        
 
                     # Determine winner
                     if rewards[0] == 1:
@@ -310,124 +310,61 @@ class ConnectFourPPOTrainer:
         kl = torch.sum(q_softmax * (torch.log(q_softmax) - p_log_softmax), dim=-1)
         return kl.mean()
 
-    # def train_ppo_step(self, batch):
-    #     """Train a single PPO step on the collected experience"""
-    #     self.model.train()
-        
-    #     # Create a copy of the model for KL penalty
-    #     ref_model = None
-    #     if KL_COEFF > 0:
-    #         ref_model = AutoModelForCausalLM.from_pretrained(
-    #             self.model_path,
-    #             device_map="auto",
-    #             trust_remote_code=True
-    #         )
-    #         ref_model.eval()
-            
-    #     # Process each example in the batch
-    #     total_loss = 0
-        
-    #     for example in batch:
-    #         # Format as instruction
-    #         input_text = example["input"]
-    #         target_text = example["output"]
-    #         reward = example["reward"]
-            
-    #         # Tokenize
-    #         inputs = self.tokenizer(input_text, return_tensors="pt").to(self.device)
-    #         targets = self.tokenizer(target_text, return_tensors="pt").to(self.device)
-            
-    #         # Forward pass
-    #         outputs = self.model(**inputs, labels=targets.input_ids)
-    #         loss = outputs.loss
-            
-    #         # Add KL penalty if using reference model
-    #         if ref_model is not None:
-    #             with torch.no_grad():
-    #                 ref_outputs = ref_model(**inputs)
-    #             kl_loss = self.compute_kl_loss(outputs.logits, ref_outputs.logits)
-    #             loss = loss + KL_COEFF * kl_loss
-                
-    #         # Apply reward weighting
-    #         loss = loss * (1.0 - reward)  # Lower loss for higher rewards
-            
-    #         total_loss += loss
-            
-    #     # Average loss over batch
-    #     avg_loss = total_loss / len(batch)
-        
-    #     # Backward and optimize
-    #     self.optimizer.zero_grad()
-    #     # Use Accelerate's backward to support distributed training
-    #     self.accelerator.backward(avg_loss)
-    #     avg_loss.backward()
-    #     torch.nn.utils.clip_grad_norm_(self.model.parameters(), MAX_GRADIENT_NORM)
-    #     self.optimizer.step()
-        
-    #     return avg_loss.item()
     def train_ppo_step(self, batch):
+        """Train a single PPO step on the collected experience"""
         self.model.train()
-
-        # If you want a reference model for KL, load it once outside or inside carefully
+        
+        # Create a copy of the model for KL penalty
         ref_model = None
         if KL_COEFF > 0:
             ref_model = AutoModelForCausalLM.from_pretrained(
                 self.model_path,
                 device_map="auto",
                 trust_remote_code=True
-            ).eval()
-
-        total_loss = 0
-
-        for example in batch:
-            prompt_text = example["input"]   # your environment prompt
-            answer_text = example["output"]  # the agent’s generation
-            reward = example["reward"]
-
-            # 1) Concatenate
-            full_text = prompt_text + answer_text
-
-            # 2) Tokenize once
-            encoding = self.tokenizer(full_text, return_tensors="pt").to(self.device)
-            input_ids = encoding["input_ids"]
+            )
+            ref_model.eval()
             
-            # 3) Create labels
-            labels = input_ids.clone()
-
-            # 4) Compute how many tokens belong to the prompt portion
-            with torch.no_grad():
-                prompt_len = len(self.tokenizer(prompt_text)["input_ids"])
-
-            # set prompt part to -100
-            labels[:, :prompt_len] = -100
-
-            # Forward pass on your main model
-            outputs = self.model(input_ids=input_ids, labels=labels)
+        # Process each example in the batch
+        total_loss = 0
+        
+        for example in batch:
+            # Format as instruction
+            input_text = example["input"]
+            target_text = example["output"]
+            reward = example["reward"]
+            
+            # Tokenize
+            inputs = self.tokenizer(input_text, return_tensors="pt").to(self.device)
+            targets = self.tokenizer(target_text, return_tensors="pt").to(self.device)
+            
+            # Forward pass
+            outputs = self.model(**inputs, labels=targets.input_ids)
             loss = outputs.loss
-
-            # Optionally add KL penalty
+            
+            # Add KL penalty if using reference model
             if ref_model is not None:
                 with torch.no_grad():
-                    ref_outputs = ref_model(input_ids=input_ids)
+                    ref_outputs = ref_model(**inputs)
                 kl_loss = self.compute_kl_loss(outputs.logits, ref_outputs.logits)
                 loss = loss + KL_COEFF * kl_loss
-
-            # Scale by reward however your PPO scheme wants
-            # (In your snippet you did `loss = loss * (1.0 - reward)`,
-            # which is somewhat unusual for PPO but that’s your design.)
-            loss = loss * (1.0 - reward)
-
+                
+            # Apply reward weighting
+            loss = loss * (1.0 - reward)  # Lower loss for higher rewards
+            
             total_loss += loss
-
+            
+        # Average loss over batch
         avg_loss = total_loss / len(batch)
-
+        
+        # Backward and optimize
         self.optimizer.zero_grad()
+        # Use Accelerate's backward to support distributed training
         self.accelerator.backward(avg_loss)
+        avg_loss.backward()
         torch.nn.utils.clip_grad_norm_(self.model.parameters(), MAX_GRADIENT_NORM)
         self.optimizer.step()
-
+        
         return avg_loss.item()
-
     
 
     def save_checkpoint(self, output_dir=OUTPUT_DIR):

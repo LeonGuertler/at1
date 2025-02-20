@@ -29,6 +29,8 @@ class AnswerTokenAgentWrapper:
         self.answer_token_prompt = f"\nAnything you return after '{self.answer_token}' will be submitted to the game."
 
     def _extract_after_token(self, raw_answer: str) -> str:
+        if raw_answer is None:
+            return "No Answer"
         if self.answer_token in raw_answer:
             answer_part = raw_answer.split(self.answer_token, 1)[-1]
             return process_final_answer(answer_part)
@@ -41,6 +43,7 @@ class AnswerTokenAgentWrapper:
 
         # generate raw answer
         raw_answer = self.agent(observation)
+        # input(raw_answer)
         self.agent.system_prompt = current_system_prompt
         return raw_answer, self._extract_after_token(raw_answer) 
 
@@ -100,13 +103,15 @@ class OpenRouterAgent(ta.Agent):
 
         payload = {"model": self.model_name, "messages": messages, "n": 1, "include_reasoning": True}
         headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
-        print('call model')
+        # print('call model')
         response = requests.post(self.base_url, headers=headers, data=json.dumps(payload))
-        print('answer received')
+        # print('answer received')
         if response.status_code != 200:
+            return "No action"
             raise RuntimeError(f"Request failed with status code {response.status_code}: {response.text}")
         response_data = response.json()
         if "error" in response_data:
+            return "No action"
             raise RuntimeError(f"API error: {response_data['error']}")
 
         # Extract the relevant parts from the first choice
@@ -139,4 +144,8 @@ class OpenRouterAgent(ta.Agent):
     def __call__(self, observation: str) -> str:
         if not isinstance(observation, str):
             raise ValueError(f"Observation must be a string. Received: {type(observation)}")
-        return self._retry_request(observation)
+        response = self._retry_request(observation)
+        if response is None:
+            return "No reply provided"
+        else: 
+            return response
