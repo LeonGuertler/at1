@@ -168,7 +168,6 @@ class ConnectFourPPOTrainer:
 
         return decoded_results
 
-ns, full_rewards, stats
 
     def collect_experience(
         self,
