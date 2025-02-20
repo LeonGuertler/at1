@@ -14,7 +14,8 @@ from typing import List, Optional, Dict
 from config import (
     STANDARD_GAME_PROMPT, MAX_NEW_TOKENS, MODEL_PATH, ENVIRONMENT_ID,
     NUM_PARALLEL_ENVS, EPSILON, GAMMA, LR, KL_COEFF, EPOCHS, BATCH_SIZE,
-    MAX_GRADIENT_NORM, MAX_NEW_TOKENS, OUTPUT_DIR, BIG_MODEL_NAMES
+    MAX_GRADIENT_NORM, MAX_NEW_TOKENS, OUTPUT_DIR, BIG_MODEL_NAMES,
+    GRAD_ACCUMULATION_STEPS
 )
 
 from utils import AnswerTokenAgentWrapper, OpenRouterAgent
@@ -26,7 +27,7 @@ class ConnectFourPPOTrainer:
         self.model_path = model_path 
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
 
-        self.accelerator = Accelerator()
+        self.accelerator = Accelerator(gradient_accumulation_steps=GRAD_ACCUMULATION_STEPS)
 
         # load tokenizer 
         self.tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
@@ -375,68 +376,181 @@ class ConnectFourPPOTrainer:
     #     self.optimizer.step()
         
     #     return avg_loss.item()
+    # def train_ppo_step(self, batch):
+    #     self.model.train()
+
+    #     # If you want a reference model for KL, load it once outside or inside carefully
+    #     ref_model = None
+    #     if KL_COEFF > 0:
+    #         ref_model = AutoModelForCausalLM.from_pretrained(
+    #             self.model_path,
+    #             device_map="auto",
+    #             trust_remote_code=True
+    #         ).eval()
+
+    #     total_loss = 0
+
+    #     for example in batch:
+    #         prompt_text = example["input"]   # your environment prompt
+    #         answer_text = example["output"]  # the agent’s generation
+    #         reward = example["reward"]
+
+    #         # 1) Concatenate
+    #         full_text = prompt_text + answer_text
+
+    #         # 2) Tokenize once
+    #         encoding = self.tokenizer(full_text, return_tensors="pt")#.to(self.device)
+    #         input_ids = encoding["input_ids"]
+            
+    #         # 3) Create labels
+    #         labels = input_ids.clone()
+
+    #         # 4) Compute how many tokens belong to the prompt portion
+    #         with torch.no_grad():
+    #             prompt_len = len(self.tokenizer(prompt_text)["input_ids"])
+
+    #         # set prompt part to -100
+    #         labels[:, :prompt_len] = -100
+
+    #         # Forward pass on your main model
+    #         outputs = self.model(input_ids=input_ids, labels=labels)
+    #         loss = outputs.loss
+
+    #         # Optionally add KL penalty
+    #         if self.ref_model is not None:
+    #             with torch.no_grad():
+    #                 ref_outputs = self.ref_model(input_ids=input_ids)
+    #             kl_loss = self.compute_kl_loss(outputs.logits, ref_outputs.logits)
+    #             loss = loss + KL_COEFF * kl_loss
+
+    #         # Scale by reward however your PPO scheme wants
+    #         # (In your snippet you did `loss = loss * (1.0 - reward)`,
+    #         # which is somewhat unusual for PPO but that’s your design.)
+    #         loss = loss * (1.0 - reward)
+
+    #         total_loss += loss
+
+    #     avg_loss = total_loss / len(batch)
+
+    #     self.optimizer.zero_grad()
+    #     self.accelerator.backward(avg_loss)
+    #     torch.nn.utils.clip_grad_norm_(self.model.parameters(), MAX_GRADIENT_NORM)
+    #     self.optimizer.step()
+
+    #     return avg_loss.item()
+    # def train_ppo_step(self, batch):
+    #     self.model.train()
+
+    #     # If you want a reference model for KL, load it once outside or inside carefully
+    #     ref_model = None
+    #     if KL_COEFF > 0:
+    #         ref_model = AutoModelForCausalLM.from_pretrained(
+    #             self.model_path,
+    #             device_map="auto",
+    #             trust_remote_code=True
+    #         ).eval()
+
+    #     total_loss = 0
+
+    #     for example in batch:
+    #         prompt_text = example["input"]   # your environment prompt
+    #         answer_text = example["output"]  # the agent’s generation
+    #         reward = example["reward"]
+
+    #         # 1) Concatenate
+    #         full_text = prompt_text + answer_text
+
+    #         # 2) Tokenize once
+    #         encoding = self.tokenizer(full_text, return_tensors="pt")#.to(self.device)
+    #         input_ids = encoding["input_ids"]
+            
+    #         # 3) Create labels
+    #         labels = input_ids.clone()
+
+    #         # 4) Compute how many tokens belong to the prompt portion
+    #         with torch.no_grad():
+    #             prompt_len = len(self.tokenizer(prompt_text)["input_ids"])
+
+    #         # set prompt part to -100
+    #         labels[:, :prompt_len] = -100
+
+    #         # Forward pass on your main model
+    #         outputs = self.model(input_ids=input_ids, labels=labels)
+    #         loss = outputs.loss
+
+    #         # Optionally add KL penalty
+    #         if self.ref_model is not None:
+    #             with torch.no_grad():
+    #                 ref_outputs = self.ref_model(input_ids=input_ids)
+    #             kl_loss = self.compute_kl_loss(outputs.logits, ref_outputs.logits)
+    #             loss = loss + KL_COEFF * kl_loss
+
+    #         # Scale by reward however your PPO scheme wants
+    #         # (In your snippet you did `loss = loss * (1.0 - reward)`,
+    #         # which is somewhat unusual for PPO but that’s your design.)
+    #         loss = loss * (1.0 - reward)
+
+    #         total_loss += loss
+
+    #     avg_loss = total_loss / len(batch)
+
+    #     self.optimizer.zero_grad()
+    #     self.accelerator.backward(avg_loss)
+    #     torch.nn.utils.clip_grad_norm_(self.model.parameters(), MAX_GRADIENT_NORM)
+    #     self.optimizer.step()
+
+    #     return avg_loss.item()
     def train_ppo_step(self, batch):
+        """Train a single PPO step on the collected experience with gradient accumulation via Accelerator"""
         self.model.train()
 
-        # If you want a reference model for KL, load it once outside or inside carefully
+        # Create a copy of the model for KL penalty if required
         ref_model = None
         if KL_COEFF > 0:
             ref_model = AutoModelForCausalLM.from_pretrained(
                 self.model_path,
                 device_map="auto",
                 trust_remote_code=True
-            ).eval()
+            ).eval()  # Keep reference model in eval mode
 
         total_loss = 0
 
-        for example in batch:
-            prompt_text = example["input"]   # your environment prompt
-            answer_text = example["output"]  # the agent’s generation
+        # Clear gradients at the start
+        self.optimizer.zero_grad()
+
+        for step, example in enumerate(batch):
+            # Tokenize inputs
+            prompt_text = example["input"]
+            target_text = example["output"]
             reward = example["reward"]
 
-            # 1) Concatenate
-            full_text = prompt_text + answer_text
+            inputs = self.tokenizer(prompt_text, return_tensors="pt").to(self.accelerator.device)
+            targets = self.tokenizer(target_text, return_tensors="pt").to(self.accelerator.device)
 
-            # 2) Tokenize once
-            encoding = self.tokenizer(full_text, return_tensors="pt")#.to(self.device)
-            input_ids = encoding["input_ids"]
-            
-            # 3) Create labels
-            labels = input_ids.clone()
-
-            # 4) Compute how many tokens belong to the prompt portion
-            with torch.no_grad():
-                prompt_len = len(self.tokenizer(prompt_text)["input_ids"])
-
-            # set prompt part to -100
-            labels[:, :prompt_len] = -100
-
-            # Forward pass on your main model
-            outputs = self.model(input_ids=input_ids, labels=labels)
+            outputs = self.model(**inputs, labels=targets.input_ids)
             loss = outputs.loss
 
-            # Optionally add KL penalty
-            if self.ref_model is not None:
+            # Apply KL penalty if using reference model
+            if ref_model is not None:
                 with torch.no_grad():
-                    ref_outputs = self.ref_model(input_ids=input_ids)
+                    ref_outputs = ref_model(**inputs)
                 kl_loss = self.compute_kl_loss(outputs.logits, ref_outputs.logits)
                 loss = loss + KL_COEFF * kl_loss
 
-            # Scale by reward however your PPO scheme wants
-            # (In your snippet you did `loss = loss * (1.0 - reward)`,
-            # which is somewhat unusual for PPO but that’s your design.)
+            # Scale loss by reward
             loss = loss * (1.0 - reward)
-
             total_loss += loss
 
-        avg_loss = total_loss / len(batch)
+            # Use Accelerator for backward pass (handles accumulation)
+            self.accelerator.backward(loss)
 
-        self.optimizer.zero_grad()
-        self.accelerator.backward(avg_loss)
-        torch.nn.utils.clip_grad_norm_(self.model.parameters(), MAX_GRADIENT_NORM)
-        self.optimizer.step()
+            # Only update gradients after enough accumulation steps
+            if (step + 1) % self.accelerator.gradient_accumulation_steps == 0 or (step + 1 == len(batch)):
+                self.accelerator.clip_grad_norm_(self.model.parameters(), MAX_GRADIENT_NORM)
+                self.optimizer.step()
+                self.optimizer.zero_grad()  # Reset gradients after update
 
-        return avg_loss.item()
+        return total_loss.item() / len(batch)  # Return average loss
 
     
 
